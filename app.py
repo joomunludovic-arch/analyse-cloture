@@ -1,117 +1,82 @@
+from flask import Flask
+import datetime
+import requests
 import pandas as pd
 import numpy as np
-from datetime import datetime
-import matplotlib.pyplot as plt
-import os
-import requests
 
-# === CONFIGURATION ===
+# === CONFIG TELEGRAM ===
 TELEGRAM_TOKEN = "8415756245:AAHaU2KBRsC3q05eLld2JjMt_V7S9j-o4ys"
 CHAT_ID = "5814604646"
-TICKERS = ["TSLA", "AAPL", "NVDA"]  # 👈 Personnalise ici les actions à suivre
-DAYS = 90
 
-# === FONCTIONS TELEGRAM ===
+app = Flask(__name__)
+
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    data = {"chat_id": CHAT_ID, "text": message}
+    data = {
+        "chat_id": CHAT_ID,
+        "text": message
+    }
     try:
         requests.post(url, data=data)
     except Exception as e:
-        print(f"[❌] Erreur Telegram : {e}")
+        print(f"Erreur Telegram : {e}")
 
-def send_telegram_image(image_path, caption="📊 Graphique"):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
-    with open(image_path, 'rb') as photo:
-        files = {'photo': photo}
-        data = {'chat_id': CHAT_ID, 'caption': caption}
-        try:
-            requests.post(url, files=files, data=data)
-        except Exception as e:
-            print(f"[❌] Erreur envoi image : {e}")
+def analyse():
+    tickers = ['AAPL', 'TSLA', 'NFLX']
+    all_signals = []
 
-# === ICHIMOKU ===
-def calculate_ichimoku(df):
-    df['Tenkan_sen'] = df['Close'].rolling(window=9).mean()
-    df['Kijun_sen'] = df['Close'].rolling(window=26).mean()
-    return df
+    for ticker in tickers:
+        np.random.seed(hash(ticker) % 123456)
+        base_price = np.random.uniform(80, 150)
+        dates = pd.date_range(end=datetime.datetime.today(), periods=60)
+        close = base_price + np.cumsum(np.random.randn(60))
+        open_ = close - np.random.uniform(0.5, 2.0, 60)
+        volume = np.random.randint(100000, 1000000, 60)
+        df = pd.DataFrame({
+            'Date': dates,
+            'Open': open_,
+            'Close': close,
+            'Volume': volume
+        })
 
-# === DONNÉES SIMULÉES (à remplacer par Yahoo Finance si tu veux du vrai) ===
-def generate_fake_data(ticker):
-    np.random.seed(hash(ticker) % 99999)
-    base_price = np.random.uniform(100, 300)
-    dates = pd.date_range(end=datetime.today(), periods=DAYS)
-    close = base_price + np.cumsum(np.random.randn(DAYS))
-    open_ = close - np.random.uniform(0.5, 2.0, DAYS)
-    volume = np.random.randint(100_000, 1_000_000, DAYS)
-    return pd.DataFrame({
-        'Date': dates,
-        'Ticker': ticker,
-        'Open': open_,
-        'Close': close,
-        'Volume': volume
-    })
+        df['Volatility'] = df['Close'].rolling(window=10).std()
+        vol_mean = df['Volatility'].mean()
+        vol_std = df['Volatility'].std()
+        df['Z_score'] = (df['Volatility'] - vol_mean) / vol_std
+        df['Tenkan_sen'] = df['Close'].rolling(window=9).mean()
+        df['Kijun_sen'] = df['Close'].rolling(window=26).mean()
 
-# === ANALYSE COMPLÈTE ===
-def run_analysis():
-    try:
-        all_signals = []
-        for ticker in TICKERS:
-            df = generate_fake_data(ticker)
-            df = df.sort_values("Date")
-            df = calculate_ichimoku(df)
-
-            # Volatilité & Z-score
-            df['Volatility'] = df['Close'].rolling(window=10).std()
-            vol_mean = df['Volatility'].mean()
-            vol_std = df['Volatility'].std()
-            df['Z_score'] = (df['Volatility'] - vol_mean) / vol_std
-
-            # Signaux
-            df['Signal'] = np.where(
-                (df['Z_score'] > 2) & (df['Close'] > df['Tenkan_sen']) & (df['Close'] > df['Kijun_sen']),
-                "📈 Signal haussier Ichimoku + Volatilité",
-                np.where(
-                    (df['Z_score'] > 2) & (df['Close'] < df['Tenkan_sen']) & (df['Close'] < df['Kijun_sen']),
-                    "📉 Signal baissier Ichimoku + Volatilité",
-                    ""
-                )
+        df['Signal'] = np.where(
+            (df['Z_score'] > 2) & (df['Close'] > df['Tenkan_sen']) & (df['Close'] > df['Kijun_sen']),
+            "📈 Signal haussier Ichimoku + Volatilité",
+            np.where(
+                (df['Z_score'] > 2) & (df['Close'] < df['Tenkan_sen']) & (df['Close'] < df['Kijun_sen']),
+                "📉 Signal baissier Ichimoku + Volatilité",
+                ""
             )
+        )
 
-            recent_signals = df[df['Signal'] != ""].tail(1)
-            if not recent_signals.empty:
-                for _, row in recent_signals.iterrows():
-                    msg = (
-                        f"📌 {ticker} - {row['Date'].strftime('%Y-%m-%d')}\n"
-                        f"💰 Prix : {row['Close']:.2f} | Z : {row['Z_score']:.2f}\n"
-                        f"{row['Signal']}"
-                    )
-                    send_telegram_message(msg)
+        alerts = df[df['Signal'] != ""][['Date', 'Close', 'Z_score', 'Signal']].tail(3)
+        alerts["Ticker"] = ticker
+        all_signals.append(alerts)
 
-            # Graphique
-            plt.figure(figsize=(12, 6))
-            plt.plot(df['Date'], df['Close'], label='Clôture', color='blue')
-            plt.plot(df['Date'], df['Tenkan_sen'], label='Tenkan', linestyle='--')
-            plt.plot(df['Date'], df['Kijun_sen'], label='Kijun', linestyle='--')
-            plt.scatter(recent_signals['Date'], recent_signals['Close'], color='red', label='Signal', zorder=5)
-            plt.title(f'{ticker} - Analyse Ichimoku & Volatilité')
-            plt.xlabel('Date')
-            plt.ylabel('Prix')
-            plt.legend()
-            plt.grid(True)
-            plt.tight_layout()
+    final = pd.concat(all_signals)
+    if not final.empty:
+        messages = []
+        for _, row in final.iterrows():
+            messages.append(
+                f"📌 {row['Ticker']} - {row['Date'].strftime('%Y-%m-%d')}\n"
+                f"💰 Prix : {row['Close']:.2f} | Z: {row['Z_score']:.2f}\n"
+                f"{row['Signal']}"
+            )
+        send_telegram_message("📊 Signaux détectés :\n\n" + "\n\n".join(messages))
+        return "\n".join(messages)
+    else:
+        msg = "✅ Aucune anomalie détectée aujourd’hui (Ichimoku + Volatilité)."
+        send_telegram_message(msg)
+        return msg
 
-            image_path = f"/tmp/{ticker}_graph.png"
-            plt.savefig(image_path)
-            plt.close()
-            send_telegram_image(image_path, caption=f"📉 {ticker} - Tendance actuelle")
-
-        if not all_signals:
-            send_telegram_message("✅ Aucune alerte détectée sur les actions suivies.")
-
-    except Exception as e:
-        send_telegram_message(f"❌ Erreur dans l’analyse : {str(e)}")
-
-# === EXÉCUTION PRINCIPALE ===
-if __name__ == "__main__":
-    run_analysis()
+@app.route("/")
+def run():
+    result = analyse()
+    return "✅ Analyse exécutée avec succès.\n" + result
